@@ -1,0 +1,70 @@
+---
+ - hosts: all
+   become: true
+   vars:
+    process: http|apache
+   tasks:
+    - name: verifying appilcation is running or stopped
+      shell: if ps -eaf | egrep '{{ process }}'| grep -v grep > /dev/null ;then echo "process_running";else echo "process_not_running";fi
+      ignore_errors: true
+      register: app_process_check
+
+    - name: decision point to decide whether to start paching or not
+      fail: msg="{{process}} still running , first stop crutial applications before patching "
+      when: app_process_check.stdout == "process_running"
+
+    - name: this task will upgrade/install the patch if available
+      yum:
+       name: "kernel"
+       state: latest
+      when: app_process_check.stdout == "process_not_running" and ansible_os_family == "RedHat"
+      register: kernal_update
+    
+    - name: checking if kernal update happened or not
+      shell: KERNEL_NEW=$(rpm -q --last kernel | head -1 | awk '{print $1}' | sed 's/kernel-//');KERNEL_NOW=$(uname -r);if [[ $KERNEL_NEW != $KERNEL_NOW ]]; then echo "reboot_needed";else echo "reebot_not_needed"; fi
+      ignore_errors: true
+      register: reboot_required
+
+    - name: restarting system if kernal updated
+      command: shutdown -r +1 "rebooting system after patching"
+      # async: 0
+      # poll: 0
+      when: reboot_required.stdout == "reboot_needed"
+      register: reboot_started
+      ignore_errors: true
+
+# if we not pause this playbook then ssh session get close after reboot
+    - name: task that will wait 3 minute after system come up after reeboot
+      pause:
+       minutes: 3 
+      when: reboot_started
+
+ # it will wait for ssh to come up,, gettin error at this step 
+    - name: this task to confirm , system is up and responding to ssh
+      local_action:
+        module: wait_for
+         host={{ inventory_hostname }}
+         port=22
+         delay=15
+         timeout=300
+         state=started
+      when: reboot_started # if changed variable holds any value
+      ignore_errors: true
+
+
+
+
+
+# async:
+# Async indicates the Total time to complete the task or its maximum runtime of the task.
+
+# poll
+# poll indicates to Ansible, how often to poll to check if the command has been completed. or
+# how frequently you would like to poll for status. with poll we keep checking whether the job is completed or not. The default poll value is 10 seconds
+
+# poll: 5 This will poll the results every 5 seconds
+
+ 
+
+# poll: 0 Fire and forget
+# if you do not need to wait on the task to complete, you may run the task asynchronously by specifying a poll value of 0: In this mode ansible will connects to the client system, starts the process and disconnects. we don’t need to wait for completion task.
